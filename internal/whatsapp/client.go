@@ -244,6 +244,8 @@ func (c *Client) SendRawMessage(msg GenericMessage) error {
 		if msg.Document.Filename != "" {
 			content += ":" + msg.Document.Filename
 		}
+	} else if msg.Interactive != nil {
+		content = fmt.Sprintf("[interactive]:%s", msg.Interactive.Type)
 	} else {
 		content = fmt.Sprintf("%s message", msg.Type)
 	}

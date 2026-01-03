@@ -19,11 +19,12 @@ type WebhookPayload struct {
 					Text      struct {
 						Body string `json:"body"`
 					} `json:"text,omitempty"`
-					Image    *MediaMessage `json:"image,omitempty"`
-					Video    *MediaMessage `json:"video,omitempty"`
-					Audio    *MediaMessage `json:"audio,omitempty"`
-					Document *MediaMessage `json:"document,omitempty"`
-					Type     string        `json:"type"`
+					Image       *MediaMessage       `json:"image,omitempty"`
+					Video       *MediaMessage       `json:"video,omitempty"`
+					Audio       *MediaMessage       `json:"audio,omitempty"`
+					Document    *MediaMessage       `json:"document,omitempty"`
+					Interactive *InteractiveMessage `json:"interactive,omitempty"`
+					Type        string              `json:"type"`
 				} `json:"messages,omitempty"`
 				Statuses []struct {
 					ID          string `json:"id"`
@@ -44,6 +45,20 @@ type MediaMessage struct {
 	SHA256   string `json:"sha256,omitempty"`
 	Caption  string `json:"caption,omitempty"`
 	Filename string `json:"filename,omitempty"`
+}
+
+// InteractiveMessage represents an interactive message response (buttons, flows)
+type InteractiveMessage struct {
+	Type     string    `json:"type"`
+	NfmReply *NfmReply `json:"nfm_reply,omitempty"` // For Flows
+	// Add other interactive types like button_reply, list_reply as needed
+}
+
+// NfmReply represents a response from a WhatsApp Flow
+type NfmReply struct {
+	ResponsePayload string `json:"response_payload"` // JSON string of the form data
+	Body            string `json:"body"`
+	Name            string `json:"name"`
 }
 
 // Message represents a flattened message structure for our DB/Dashboard

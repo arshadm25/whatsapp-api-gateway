@@ -91,6 +91,18 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 					}
 				}
 				log.Printf("Received document from %s", message.From)
+			case "interactive":
+				if message.Interactive != nil {
+					if message.Interactive.Type == "nfm_reply" && message.Interactive.NfmReply != nil {
+						// This is a Flow response
+						reply := message.Interactive.NfmReply
+						content = "[flow_response]:" + reply.ResponsePayload
+						log.Printf("Received Flow response from %s: %s", message.From, reply.ResponsePayload)
+					} else {
+						content = "[interactive]:" + message.Interactive.Type
+					}
+				}
+				log.Printf("Received interactive message from %s", message.From)
 			default:
 				content = "[" + message.Type + "]"
 				log.Printf("Received %s from %s", message.Type, message.From)
