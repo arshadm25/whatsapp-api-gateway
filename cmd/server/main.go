@@ -61,6 +61,7 @@ func main() {
 
 		// Broadcast Routes
 		apiGroup.GET("/templates", broadcastHandler.GetTemplates)
+		apiGroup.GET("/templates/meta", broadcastHandler.GetTemplatesFromMeta)
 		apiGroup.POST("/templates/sync", broadcastHandler.SyncTemplates)
 		apiGroup.POST("/broadcast", broadcastHandler.SendBroadcast)
 

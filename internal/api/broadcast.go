@@ -1,6 +1,8 @@
 package api
 
 import (
+	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"whatsapp-gateway/internal/config"
@@ -20,24 +22,97 @@ func NewBroadcastHandler(client *whatsapp.Client, cfg *config.Config) *Broadcast
 	return &BroadcastHandler{Client: client, Config: cfg}
 }
 
-// SyncTemplates fetches templates from Meta and stores them
+// SyncTemplates fetches templates from Meta and stores them locally
 func (h *BroadcastHandler) SyncTemplates(c *gin.Context) {
 	if h.Config.WhatsAppBusinessAccountID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "WABA_ID not configured in .env"})
 		return
 	}
 
-	// Fetch from Meta (Mock implementation or Real call would go here)
-	// Real call: https://graph.facebook.com/v19.0/{WABA_ID}/message_templates
-	// For now, we will assume we fetch them and insert dummy/real data
+	// Fetch from Meta API
+	rawTemplates, err := h.Client.GetTemplates()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch templates from Meta: " + err.Error()})
+		return
+	}
 
-	// TODO: Implement actual HTTP call to Meta.
-	// For the sake of this demo, let's allow creating a template manually or mock it.
+	// Parse the response
+	templatesMap, ok := rawTemplates.(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid response format from Meta"})
+		return
+	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "Templates synced (stub)"})
+	data, ok := templatesMap["data"].([]interface{})
+	if !ok {
+		c.JSON(http.StatusOK, gin.H{"status": "No templates found", "count": 0})
+		return
+	}
+
+	// Store templates in database
+	syncedCount := 0
+	for _, item := range data {
+		tmpl, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		id := tmpl["id"].(string)
+		name := tmpl["name"].(string)
+		language := ""
+		if lang, ok := tmpl["language"].(string); ok {
+			language = lang
+		}
+		category := ""
+		if cat, ok := tmpl["category"].(string); ok {
+			category = cat
+		}
+		status := ""
+		if st, ok := tmpl["status"].(string); ok {
+			status = st
+		}
+
+		// Serialize components to JSON string
+		componentsJSON := "[]"
+		if components, ok := tmpl["components"]; ok {
+			compBytes, err := json.Marshal(components)
+			if err == nil {
+				componentsJSON = string(compBytes)
+			}
+		}
+
+		// Upsert into database
+		_, err = database.DB.Exec(`INSERT INTO templates(id, name, language, category, status, components) 
+			VALUES(?, ?, ?, ?, ?, ?) 
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name, language=excluded.language, 
+			category=excluded.category, status=excluded.status, components=excluded.components`,
+			id, name, language, category, status, componentsJSON)
+		if err != nil {
+			log.Printf("Error saving template %s: %v", name, err)
+			continue
+		}
+		syncedCount++
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Templates synced", "count": syncedCount})
 }
 
-// GetTemplates returns stored templates
+// GetTemplatesFromMeta returns raw templates from Meta API (not cached)
+func (h *BroadcastHandler) GetTemplatesFromMeta(c *gin.Context) {
+	if h.Config.WhatsAppBusinessAccountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "WABA_ID not configured"})
+		return
+	}
+
+	templates, err := h.Client.GetTemplates()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, templates)
+}
+
+// GetTemplates returns stored templates from local database
 func (h *BroadcastHandler) GetTemplates(c *gin.Context) {
 	rows, err := database.DB.Query("SELECT id, name, language, category, status, components FROM templates")
 	if err != nil {
@@ -49,12 +124,22 @@ func (h *BroadcastHandler) GetTemplates(c *gin.Context) {
 	var templates []models.Template
 	for rows.Next() {
 		var t models.Template
-		if err := rows.Scan(&t.ID, &t.Name, &t.Language, &t.Category, &t.Status, &t.Components); err != nil {
+		var components sql.NullString
+		if err := rows.Scan(&t.ID, &t.Name, &t.Language, &t.Category, &t.Status, &components); err != nil {
 			log.Printf("Error scanning template: %v", err)
 			continue
 		}
+		if components.Valid {
+			t.Components = components.String
+		}
 		templates = append(templates, t)
 	}
+
+	// Return empty array instead of null
+	if templates == nil {
+		templates = []models.Template{}
+	}
+
 	c.JSON(http.StatusOK, templates)
 }
 
