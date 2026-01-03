@@ -79,7 +79,9 @@ func main() {
 		{
 			whatsappGroup.POST("/send", whatsappHandler.SendMessage)
 			whatsappGroup.POST("/media", whatsappHandler.UploadMedia)
+			whatsappGroup.GET("/media", whatsappHandler.ListMedia)
 			whatsappGroup.GET("/media/:id", whatsappHandler.RetrieveMediaURL)
+			whatsappGroup.GET("/media/:id/proxy", whatsappHandler.DownloadMediaProxy)
 			whatsappGroup.DELETE("/media/:id", whatsappHandler.DeleteMedia)
 			whatsappGroup.GET("/templates", whatsappHandler.GetTemplates)
 			whatsappGroup.POST("/templates", whatsappHandler.CreateTemplate)

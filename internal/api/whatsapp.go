@@ -2,7 +2,10 @@ package api
 
 import (
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
+	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/whatsapp"
 
 	"github.com/gin-gonic/gin"
@@ -52,7 +55,15 @@ func (h *WhatsAppHandler) UploadMedia(c *gin.Context) {
 		return
 	}
 
+	// Get MIME type from header, but fallback to extension if it's generic
 	mimeType := header.Header.Get("Content-Type")
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		// Detect from file extension
+		ext := filepath.Ext(header.Filename)
+		if detectedType := mime.TypeByExtension(ext); detectedType != "" {
+			mimeType = detectedType
+		}
+	}
 
 	resp, err := h.Client.UploadMedia(fileBytes, mimeType, header.Filename)
 	if err != nil {
@@ -60,7 +71,27 @@ func (h *WhatsAppHandler) UploadMedia(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, resp)
+	// Save to database for persistence
+	_, err = database.DB.Exec(`
+		INSERT INTO media (media_id, filename, mime_type, file_size)
+		VALUES (?, ?, ?, ?)
+	`, resp.ID, header.Filename, mimeType, header.Size)
+	if err != nil {
+		// Log but don't fail - upload to WhatsApp succeeded
+		c.JSON(http.StatusOK, gin.H{
+			"id":       resp.ID,
+			"filename": header.Filename,
+			"warning":  "Upload succeeded but failed to save to local database",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":        resp.ID,
+		"filename":  header.Filename,
+		"mime_type": mimeType,
+		"file_size": header.Size,
+	})
 }
 
 // RetrieveMediaURL gets the URL for a media ID
@@ -80,6 +111,48 @@ func (h *WhatsAppHandler) RetrieveMediaURL(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"url": url})
 }
 
+// DownloadMediaProxy downloads media from WhatsApp and serves it (as a proxy)
+func (h *WhatsAppHandler) DownloadMediaProxy(c *gin.Context) {
+	mediaID := c.Param("id")
+	if mediaID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Media ID required"})
+		return
+	}
+
+	// Get the media URL from WhatsApp
+	mediaURL, err := h.Client.RetrieveMediaURL(mediaID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Download the media with authentication
+	req, err := http.NewRequest("GET", mediaURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+h.Client.Config.WhatsAppToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	// Set the content type from the response
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "" {
+		c.Header("Content-Type", contentType)
+	}
+
+	// Stream the response body to the client
+	c.Status(resp.StatusCode)
+	io.Copy(c.Writer, resp.Body)
+}
+
 // DeleteMedia deletes a media object
 func (h *WhatsAppHandler) DeleteMedia(c *gin.Context) {
 	mediaID := c.Param("id")
@@ -93,7 +166,47 @@ func (h *WhatsAppHandler) DeleteMedia(c *gin.Context) {
 		return
 	}
 
+	// Also remove from local database
+	database.DB.Exec("DELETE FROM media WHERE media_id = ?", mediaID)
+
 	c.JSON(http.StatusOK, gin.H{"status": "Media deleted"})
+}
+
+// ListMedia lists all stored media
+func (h *WhatsAppHandler) ListMedia(c *gin.Context) {
+	rows, err := database.DB.Query(`
+		SELECT id, media_id, filename, mime_type, file_size, uploaded_at
+		FROM media
+		ORDER BY uploaded_at DESC
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var mediaList []gin.H
+	for rows.Next() {
+		var id int
+		var mediaID, filename, mimeType string
+		var fileSize int64
+		var uploadedAt string
+
+		if err := rows.Scan(&id, &mediaID, &filename, &mimeType, &fileSize, &uploadedAt); err != nil {
+			continue
+		}
+
+		mediaList = append(mediaList, gin.H{
+			"id":          id,
+			"media_id":    mediaID,
+			"filename":    filename,
+			"mime_type":   mimeType,
+			"file_size":   fileSize,
+			"uploaded_at": uploadedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, mediaList)
 }
 
 // GetTemplates retrieves templates from Meta

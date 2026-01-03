@@ -19,7 +19,11 @@ type WebhookPayload struct {
 					Text      struct {
 						Body string `json:"body"`
 					} `json:"text,omitempty"`
-					Type string `json:"type"`
+					Image    *MediaMessage `json:"image,omitempty"`
+					Video    *MediaMessage `json:"video,omitempty"`
+					Audio    *MediaMessage `json:"audio,omitempty"`
+					Document *MediaMessage `json:"document,omitempty"`
+					Type     string        `json:"type"`
 				} `json:"messages,omitempty"`
 				Statuses []struct {
 					ID          string `json:"id"`
@@ -31,6 +35,15 @@ type WebhookPayload struct {
 			Field string `json:"field"`
 		} `json:"changes"`
 	} `json:"entry"`
+}
+
+// MediaMessage represents a media attachment in a WhatsApp message
+type MediaMessage struct {
+	ID       string `json:"id"`
+	MimeType string `json:"mime_type"`
+	SHA256   string `json:"sha256,omitempty"`
+	Caption  string `json:"caption,omitempty"`
+	Filename string `json:"filename,omitempty"`
 }
 
 // Message represents a flattened message structure for our DB/Dashboard

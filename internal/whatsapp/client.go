@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
 )
@@ -226,6 +227,23 @@ func (c *Client) SendRawMessage(msg GenericMessage) error {
 		content = msg.Text.Body
 	} else if msg.Template != nil {
 		content = "Template: " + msg.Template.Name
+	} else if msg.Image != nil {
+		content = fmt.Sprintf("[image]:%s", msg.Image.ID)
+		if msg.Image.Caption != "" {
+			content += ":" + msg.Image.Caption
+		}
+	} else if msg.Video != nil {
+		content = fmt.Sprintf("[video]:%s", msg.Video.ID)
+		if msg.Video.Caption != "" {
+			content += ":" + msg.Video.Caption
+		}
+	} else if msg.Audio != nil {
+		content = fmt.Sprintf("[audio]:%s", msg.Audio.ID)
+	} else if msg.Document != nil {
+		content = fmt.Sprintf("[document]:%s", msg.Document.ID)
+		if msg.Document.Filename != "" {
+			content += ":" + msg.Document.Filename
+		}
 	} else {
 		content = fmt.Sprintf("%s message", msg.Type)
 	}
@@ -295,13 +313,19 @@ func (c *Client) UploadMedia(fileData []byte, mimeType, filename string) (*Media
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	part, err := writer.CreateFormFile("file", filename)
+	// Create a custom form file with the correct MIME type
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+	h.Set("Content-Type", mimeType)
+
+	part, err := writer.CreatePart(h)
 	if err != nil {
 		return nil, err
 	}
 	part.Write(fileData)
 
 	writer.WriteField("messaging_product", "whatsapp")
+	writer.WriteField("type", mimeType)
 	writer.Close()
 
 	req, err := http.NewRequest("POST", url, body)

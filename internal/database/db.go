@@ -131,5 +131,18 @@ func InitDB(dbPath string) {
 		log.Fatalf("Failed to create table automation_logs: %v", err)
 	}
 
-	log.Println("Database initialized successfully (messages, contacts, templates, automation)")
+	// Media Table
+	createMediaSQL := `CREATE TABLE IF NOT EXISTS media (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		media_id TEXT NOT NULL UNIQUE,
+		filename TEXT,
+		mime_type TEXT,
+		file_size INTEGER,
+		uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := DB.Exec(createMediaSQL); err != nil {
+		log.Fatalf("Failed to create table media: %v", err)
+	}
+
+	log.Println("Database initialized successfully (messages, contacts, templates, automation, media)")
 }
