@@ -515,11 +515,21 @@ func (c *Client) UploadFlowJSON(flowID string, fileData []byte) (interface{}, er
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	part, err := writer.CreateFormFile("file", "flow.json")
+	// Create custom part with application/json MIME type
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="file"; filename="flow.json"`)
+	h.Set("Content-Type", "application/json")
+
+	part, err := writer.CreatePart(h)
 	if err != nil {
 		return nil, err
 	}
 	part.Write(fileData)
+
+	// Add required 'name' field
+	writer.WriteField("name", "flow.json")
+	// Add required 'asset_type' field
+	writer.WriteField("asset_type", "FLOW_JSON")
 
 	writer.Close()
 

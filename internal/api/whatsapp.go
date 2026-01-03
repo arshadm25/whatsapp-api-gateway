@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -272,6 +274,25 @@ func (h *WhatsAppHandler) GetFlow(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Fetch graph_data from local DB
+	var graphData string
+	err = database.DB.QueryRow("SELECT graph_data FROM flows WHERE id = ?", flowID).Scan(&graphData)
+	if err == nil && graphData != "" {
+		// If flow is a map, map it
+		if flowMap, ok := flow.(map[string]interface{}); ok {
+			// We need to unmarshal graphData string back to object to nest it properly
+			var graphObj interface{}
+			if err := json.Unmarshal([]byte(graphData), &graphObj); err == nil {
+				flowMap["graph_data"] = graphObj
+			} else {
+				flowMap["graph_data"] = graphData // fallback to string
+			}
+			c.JSON(http.StatusOK, flowMap)
+			return
+		}
+	}
+
 	c.JSON(http.StatusOK, flow)
 }
 
@@ -336,6 +357,18 @@ func (h *WhatsAppHandler) UploadFlowJSON(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Save graph_data to local DB
+	graphData := c.PostForm("graph_data")
+	if graphData != "" {
+		_, err := database.DB.Exec(`INSERT INTO flows (id, graph_data) VALUES (?, ?) 
+			ON CONFLICT(id) DO UPDATE SET graph_data=excluded.graph_data, updated_at=CURRENT_TIMESTAMP`, flowID, graphData)
+		if err != nil {
+			// Log error but don't fail the request since Meta upload succeeded
+			fmt.Printf("Error saving graph data: %v\n", err)
+		}
+	}
+
 	c.JSON(http.StatusOK, resp)
 }
 

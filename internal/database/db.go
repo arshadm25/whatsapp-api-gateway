@@ -144,5 +144,17 @@ func InitDB(dbPath string) {
 		log.Fatalf("Failed to create table media: %v", err)
 	}
 
+	// Flows Table (Local state for WhatsApp Flows)
+	createFlowsSQL := `CREATE TABLE IF NOT EXISTS flows (
+		id TEXT PRIMARY KEY,
+		name TEXT,
+		status TEXT,
+		graph_data TEXT, -- ReactFlow nodes/edges
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := DB.Exec(createFlowsSQL); err != nil {
+		log.Fatalf("Failed to create table flows: %v", err)
+	}
+
 	log.Println("Database initialized successfully (messages, contacts, templates, automation, media)")
 }
