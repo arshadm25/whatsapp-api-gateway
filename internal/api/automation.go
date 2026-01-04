@@ -2,11 +2,10 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"whatsapp-gateway/internal/database"
-	"whatsapp-gateway/pkg/models"
+	"whatsapp-gateway/internal/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,26 +18,10 @@ func NewAutomationHandler() *AutomationHandler {
 
 // GetRules returns all automation rules
 func (h *AutomationHandler) GetRules(c *gin.Context) {
-	rows, err := database.DB.Query(`
-		SELECT id, name, type, enabled, priority, conditions, actions, created_at, updated_at
-		FROM automation_rules
-		ORDER BY priority DESC, created_at DESC
-	`)
-	if err != nil {
+	var rules []models.AutomationRule
+	if err := database.GormDB.Order("priority DESC, created_at DESC").Find(&rules).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	defer rows.Close()
-
-	var rules []models.AutomationRule
-	for rows.Next() {
-		var rule models.AutomationRule
-		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Type, &rule.Enabled, &rule.Priority,
-			&rule.Conditions, &rule.Actions, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
-			log.Printf("Error scanning rule: %v", err)
-			continue
-		}
-		rules = append(rules, rule)
 	}
 
 	c.JSON(http.StatusOK, rules)
@@ -59,18 +42,20 @@ func (h *AutomationHandler) CreateRule(c *gin.Context) {
 		return
 	}
 
-	result, err := database.DB.Exec(`
-		INSERT INTO automation_rules (name, type, priority, conditions, actions)
-		VALUES (?, ?, ?, ?, ?)
-	`, req.Name, req.Type, req.Priority, string(req.Conditions), string(req.Actions))
+	rule := models.AutomationRule{
+		Name:       req.Name,
+		Type:       req.Type,
+		Priority:   req.Priority,
+		Conditions: string(req.Conditions),
+		Actions:    string(req.Actions),
+	}
 
-	if err != nil {
+	if err := database.GormDB.Create(&rule).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	id, _ := result.LastInsertId()
-	c.JSON(http.StatusCreated, gin.H{"id": id, "message": "Rule created successfully"})
+	c.JSON(http.StatusCreated, gin.H{"id": rule.ID, "message": "Rule created successfully"})
 }
 
 // UpdateRule updates an existing automation rule
@@ -90,13 +75,22 @@ func (h *AutomationHandler) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	_, err := database.DB.Exec(`
-		UPDATE automation_rules 
-		SET name = ?, type = ?, priority = ?, conditions = ?, actions = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, req.Name, req.Type, req.Priority, string(req.Conditions), string(req.Actions), id)
+	updateData := map[string]interface{}{}
+	if req.Name != "" {
+		updateData["name"] = req.Name
+	}
+	if req.Type != "" {
+		updateData["type"] = req.Type
+	}
+	updateData["priority"] = req.Priority
+	if len(req.Conditions) > 0 {
+		updateData["conditions"] = string(req.Conditions)
+	}
+	if len(req.Actions) > 0 {
+		updateData["actions"] = string(req.Actions)
+	}
 
-	if err != nil {
+	if err := database.GormDB.Model(&models.AutomationRule{}).Where("id = ?", id).Updates(updateData).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -108,8 +102,7 @@ func (h *AutomationHandler) UpdateRule(c *gin.Context) {
 func (h *AutomationHandler) DeleteRule(c *gin.Context) {
 	id := c.Param("id")
 
-	_, err := database.DB.Exec("DELETE FROM automation_rules WHERE id = ?", id)
-	if err != nil {
+	if err := database.GormDB.Delete(&models.AutomationRule{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -130,8 +123,7 @@ func (h *AutomationHandler) ToggleRule(c *gin.Context) {
 		return
 	}
 
-	_, err := database.DB.Exec("UPDATE automation_rules SET enabled = ? WHERE id = ?", req.Enabled, id)
-	if err != nil {
+	if err := database.GormDB.Model(&models.AutomationRule{}).Where("id = ?", id).Update("enabled", req.Enabled).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -144,27 +136,10 @@ func (h *AutomationHandler) GetLogs(c *gin.Context) {
 	limit := c.DefaultQuery("limit", "50")
 	limitInt, _ := strconv.Atoi(limit)
 
-	rows, err := database.DB.Query(`
-		SELECT id, rule_id, wa_id, trigger_type, action_taken, success, error_message, created_at
-		FROM automation_logs
-		ORDER BY created_at DESC
-		LIMIT ?
-	`, limitInt)
-
-	if err != nil {
+	var logs []models.AutomationLog
+	if err := database.GormDB.Order("created_at DESC").Limit(limitInt).Find(&logs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	defer rows.Close()
-
-	var logs []models.AutomationLog
-	for rows.Next() {
-		var log models.AutomationLog
-		if err := rows.Scan(&log.ID, &log.RuleID, &log.WaID, &log.TriggerType,
-			&log.ActionTaken, &log.Success, &log.ErrorMessage, &log.CreatedAt); err != nil {
-			continue
-		}
-		logs = append(logs, log)
 	}
 
 	c.JSON(http.StatusOK, logs)
@@ -173,18 +148,18 @@ func (h *AutomationHandler) GetLogs(c *gin.Context) {
 // GetAnalytics returns automation analytics
 func (h *AutomationHandler) GetAnalytics(c *gin.Context) {
 	var stats struct {
-		TotalRules      int `json:"total_rules"`
-		ActiveRules     int `json:"active_rules"`
-		TotalExecutions int `json:"total_executions"`
-		SuccessfulExecs int `json:"successful_executions"`
-		FailedExecs     int `json:"failed_executions"`
+		TotalRules      int64 `json:"total_rules"`
+		ActiveRules     int64 `json:"active_rules"`
+		TotalExecutions int64 `json:"total_executions"`
+		SuccessfulExecs int64 `json:"successful_executions"`
+		FailedExecs     int64 `json:"failed_executions"`
 	}
 
-	database.DB.QueryRow("SELECT COUNT(*) FROM automation_rules").Scan(&stats.TotalRules)
-	database.DB.QueryRow("SELECT COUNT(*) FROM automation_rules WHERE enabled = 1").Scan(&stats.ActiveRules)
-	database.DB.QueryRow("SELECT COUNT(*) FROM automation_logs").Scan(&stats.TotalExecutions)
-	database.DB.QueryRow("SELECT COUNT(*) FROM automation_logs WHERE success = 1").Scan(&stats.SuccessfulExecs)
-	database.DB.QueryRow("SELECT COUNT(*) FROM automation_logs WHERE success = 0").Scan(&stats.FailedExecs)
+	database.GormDB.Model(&models.AutomationRule{}).Count(&stats.TotalRules)
+	database.GormDB.Model(&models.AutomationRule{}).Where("enabled = ?", true).Count(&stats.ActiveRules)
+	database.GormDB.Model(&models.AutomationLog{}).Count(&stats.TotalExecutions)
+	database.GormDB.Model(&models.AutomationLog{}).Where("success = ?", true).Count(&stats.SuccessfulExecs)
+	database.GormDB.Model(&models.AutomationLog{}).Where("success = ?", false).Count(&stats.FailedExecs)
 
 	c.JSON(http.StatusOK, stats)
 }

@@ -9,9 +9,13 @@ import (
 	"path/filepath"
 	"time"
 	"whatsapp-gateway/internal/database"
+	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
 
+	"whatsapp-gateway/internal/automation"
+
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type WhatsAppHandler struct {
@@ -75,11 +79,14 @@ func (h *WhatsAppHandler) UploadMedia(c *gin.Context) {
 	}
 
 	// Save to database for persistence
-	_, err = database.DB.Exec(`
-		INSERT INTO media (media_id, filename, mime_type, file_size)
-		VALUES (?, ?, ?, ?)
-	`, resp.ID, header.Filename, mimeType, header.Size)
-	if err != nil {
+	media := models.Media{
+		MediaID:  resp.ID,
+		Filename: header.Filename,
+		MimeType: mimeType,
+		FileSize: header.Size,
+	}
+
+	if err := database.GormDB.Create(&media).Error; err != nil {
 		// Log but don't fail - upload to WhatsApp succeeded
 		c.JSON(http.StatusOK, gin.H{
 			"id":       resp.ID,
@@ -170,43 +177,17 @@ func (h *WhatsAppHandler) DeleteMedia(c *gin.Context) {
 	}
 
 	// Also remove from local database
-	database.DB.Exec("DELETE FROM media WHERE media_id = ?", mediaID)
+	database.GormDB.Where("media_id = ?", mediaID).Delete(&models.Media{})
 
 	c.JSON(http.StatusOK, gin.H{"status": "Media deleted"})
 }
 
 // ListMedia lists all stored media
 func (h *WhatsAppHandler) ListMedia(c *gin.Context) {
-	rows, err := database.DB.Query(`
-		SELECT id, media_id, filename, mime_type, file_size, uploaded_at
-		FROM media
-		ORDER BY uploaded_at DESC
-	`)
-	if err != nil {
+	var mediaList []models.Media
+	if err := database.GormDB.Order("uploaded_at DESC").Find(&mediaList).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	defer rows.Close()
-
-	var mediaList []gin.H
-	for rows.Next() {
-		var id int
-		var mediaID, filename, mimeType string
-		var fileSize int64
-		var uploadedAt string
-
-		if err := rows.Scan(&id, &mediaID, &filename, &mimeType, &fileSize, &uploadedAt); err != nil {
-			continue
-		}
-
-		mediaList = append(mediaList, gin.H{
-			"id":          id,
-			"media_id":    mediaID,
-			"filename":    filename,
-			"mime_type":   mimeType,
-			"file_size":   fileSize,
-			"uploaded_at": uploadedAt,
-		})
 	}
 
 	c.JSON(http.StatusOK, mediaList)
@@ -277,17 +258,15 @@ func (h *WhatsAppHandler) GetFlow(c *gin.Context) {
 	}
 
 	// Fetch graph_data from local DB
-	var graphData string
-	err = database.DB.QueryRow("SELECT graph_data FROM flows WHERE id = ?", flowID).Scan(&graphData)
-	if err == nil && graphData != "" {
+	graphJSON, err := h.getFlowGraph(flowID)
+	if err == nil && graphJSON != "" {
 		// If flow is a map, map it
 		if flowMap, ok := flow.(map[string]interface{}); ok {
-			// We need to unmarshal graphData string back to object to nest it properly
 			var graphObj interface{}
-			if err := json.Unmarshal([]byte(graphData), &graphObj); err == nil {
+			if err := json.Unmarshal([]byte(graphJSON), &graphObj); err == nil {
 				flowMap["graph_data"] = graphObj
 			} else {
-				flowMap["graph_data"] = graphData // fallback to string
+				flowMap["graph_data"] = graphJSON // fallback to string
 			}
 			c.JSON(http.StatusOK, flowMap)
 			return
@@ -362,11 +341,16 @@ func (h *WhatsAppHandler) UploadFlowJSON(c *gin.Context) {
 	// Save graph_data to local DB
 	graphData := c.PostForm("graph_data")
 	if graphData != "" {
-		_, err := database.DB.Exec(`INSERT INTO flows (id, graph_data) VALUES (?, ?) 
-			ON CONFLICT(id) DO UPDATE SET graph_data=excluded.graph_data, updated_at=CURRENT_TIMESTAMP`, flowID, graphData)
-		if err != nil {
-			// Log error but don't fail the request since Meta upload succeeded
-			fmt.Printf("Error saving graph data: %v\n", err)
+		flow := models.Flow{
+			ID:   flowID,
+			Name: "Imported Flow " + flowID, // Default name if unknown
+		}
+		if err := database.GormDB.FirstOrCreate(&flow).Error; err == nil {
+			if err := h.syncFlowGraph(flowID, graphData); err != nil {
+				fmt.Printf("Error syncing graph data: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Error saving flow record: %v\n", err)
 		}
 	}
 
@@ -413,60 +397,147 @@ func (h *WhatsAppHandler) SaveLocalFlow(c *gin.Context) {
 		req.ID = fmt.Sprintf("flow_%d", time.Now().Unix())
 	}
 
-	_, err := database.DB.Exec(`
-		INSERT INTO flows (id, name, status, graph_data) 
-		VALUES (?, ?, 'draft', ?)
-		ON CONFLICT(id) DO UPDATE SET 
-			name=excluded.name, 
-			graph_data=excluded.graph_data, 
-			updated_at=CURRENT_TIMESTAMP
-	`, req.ID, req.Name, req.GraphData)
+	flow := models.Flow{
+		ID:     req.ID,
+		Name:   req.Name,
+		Status: "draft",
+	}
 
-	if err != nil {
+	if err := database.GormDB.Save(&flow).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.syncFlowGraph(req.ID, req.GraphData); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Saved flow but failed to sync relational graph: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"id": req.ID, "status": "saved"})
 }
 
+func (h *WhatsAppHandler) syncFlowGraph(flowID string, graphData string) error {
+	var graph automation.FlowGraphData
+	if err := json.Unmarshal([]byte(graphData), &graph); err != nil {
+		return err
+	}
+
+	return database.GormDB.Transaction(func(tx *gorm.DB) error {
+		// Delete existing nodes and edges
+		if err := tx.Where("flow_id = ?", flowID).Delete(&models.FlowNode{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("flow_id = ?", flowID).Delete(&models.FlowEdge{}).Error; err != nil {
+			return err
+		}
+
+		// Insert new nodes
+		for _, n := range graph.Nodes {
+			dataJSON, _ := json.Marshal(n.Data)
+			node := models.FlowNode{
+				FlowID:    flowID,
+				NodeID:    n.ID,
+				Type:      n.Type,
+				PositionX: n.Position["x"],
+				PositionY: n.Position["y"],
+				Data:      string(dataJSON),
+			}
+			if err := tx.Create(&node).Error; err != nil {
+				return err
+			}
+		}
+
+		// Insert new edges
+		for _, e := range graph.Edges {
+			edge := models.FlowEdge{
+				FlowID:       flowID,
+				EdgeID:       e.ID,
+				Source:       e.Source,
+				Target:       e.Target,
+				SourceHandle: e.SourceHandle,
+			}
+			if err := tx.Create(&edge).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func (h *WhatsAppHandler) getFlowGraph(flowID string) (string, error) {
+	var nodes []models.FlowNode
+	var edges []models.FlowEdge
+
+	if err := database.GormDB.Where("flow_id = ?", flowID).Find(&nodes).Error; err != nil {
+		return "", err
+	}
+	if err := database.GormDB.Where("flow_id = ?", flowID).Find(&edges).Error; err != nil {
+		return "", err
+	}
+
+	graph := automation.FlowGraphData{
+		Nodes: make([]automation.ReactFlowNode, len(nodes)),
+		Edges: make([]automation.ReactFlowEdge, len(edges)),
+	}
+
+	for i, n := range nodes {
+		var data automation.ReactFlowNodeData
+		json.Unmarshal([]byte(n.Data), &data)
+		graph.Nodes[i] = automation.ReactFlowNode{
+			ID:   n.NodeID,
+			Type: n.Type,
+			Position: map[string]float64{
+				"x": n.PositionX,
+				"y": n.PositionY,
+			},
+			Data: data,
+		}
+	}
+
+	for i, e := range edges {
+		graph.Edges[i] = automation.ReactFlowEdge{
+			ID:           e.EdgeID,
+			Source:       e.Source,
+			Target:       e.Target,
+			SourceHandle: e.SourceHandle,
+		}
+	}
+
+	graphJSON, _ := json.Marshal(graph)
+	return string(graphJSON), nil
+}
+
 // GetLocalFlows lists local flows
 func (h *WhatsAppHandler) GetLocalFlows(c *gin.Context) {
-	rows, err := database.DB.Query("SELECT id, name, updated_at FROM flows ORDER BY updated_at DESC")
-	if err != nil {
+	var flows []models.Flow
+	if err := database.GormDB.Order("updated_at DESC").Find(&flows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	defer rows.Close()
 
-	var flows []gin.H
-	for rows.Next() {
-		var id, name, updatedAt string
-		if err := rows.Scan(&id, &name, &updatedAt); err != nil {
-			continue
-		}
-		flows = append(flows, gin.H{"id": id, "name": name, "updated_at": updatedAt})
-	}
-	if flows == nil {
-		flows = []gin.H{}
-	}
 	c.JSON(http.StatusOK, flows)
 }
 
 // GetLocalFlow gets a single local flow
 func (h *WhatsAppHandler) GetLocalFlow(c *gin.Context) {
 	id := c.Param("id")
-	var name, graphData string
-	err := database.DB.QueryRow("SELECT name, graph_data FROM flows WHERE id = ?", id).Scan(&name, &graphData)
-	if err != nil {
+	var flow models.Flow
+	if err := database.GormDB.First(&flow, "id = ?", id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		return
 	}
 
+	graphJSON, err := h.getFlowGraph(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load graph data"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"id":         id,
-		"name":       name,
-		"graph_data": json.RawMessage(graphData),
+		"id":         flow.ID,
+		"name":       flow.Name,
+		"graph_data": json.RawMessage(graphJSON),
 	})
 }
 
@@ -474,14 +545,13 @@ func (h *WhatsAppHandler) GetLocalFlow(c *gin.Context) {
 func (h *WhatsAppHandler) DeleteLocalFlow(c *gin.Context) {
 	id := c.Param("id")
 
-	result, err := database.DB.Exec("DELETE FROM flows WHERE id = ?", id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	result := database.GormDB.Delete(&models.Flow{}, "id = ?", id)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
+	if result.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
 		return
 	}

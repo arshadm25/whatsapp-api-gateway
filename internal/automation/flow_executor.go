@@ -8,23 +8,16 @@ import (
 	"strconv"
 	"strings"
 	"whatsapp-gateway/internal/database"
+	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
 )
 
 // StartFlow initiates a flow for a user
 func (e *Engine) StartFlow(waID string, flowID string) error {
-	// 1. Fetch Flow Data
-	var graphDataJSON string
-	err := database.DB.QueryRow("SELECT graph_data FROM flows WHERE id = ?", flowID).Scan(&graphDataJSON)
+	// 1. Fetch Graph Data Relationally
+	graph, err := e.LoadGraph(flowID)
 	if err != nil {
-		log.Printf("Error fetching flow %s: %v", flowID, err)
-		return err
-	}
-
-	// 2. Parse Graph Data
-	var graph FlowGraphData
-	if err := json.Unmarshal([]byte(graphDataJSON), &graph); err != nil {
-		log.Printf("Error parsing flow graph: %v", err)
+		log.Printf("Error loading graph for flow %s: %v", flowID, err)
 		return err
 	}
 
@@ -42,26 +35,24 @@ func (e *Engine) StartFlow(waID string, flowID string) error {
 	}
 
 	// 4. Create Session
-	_, err = database.DB.Exec(`
-		INSERT INTO conversation_sessions (wa_id, flow_id, current_node, context, status)
-		VALUES (?, ?, ?, '{}', 'active')
-	`, waID, flowID, startNode.ID)
+	session := models.ConversationSession{
+		WaID:        waID,
+		FlowID:      flowID,
+		CurrentNode: startNode.ID,
+		Context:     "{}",
+		Status:      "active",
+	}
 
-	if err != nil {
-		// If existing active session, update it.
+	if err := database.GormDB.Create(&session).Error; err != nil {
+		// If existing active session, terminate it and try again.
 		e.TerminateSession(waID)
-		// Retry
-		_, err = database.DB.Exec(`
-			INSERT INTO conversation_sessions (wa_id, flow_id, current_node, context, status)
-			VALUES (?, ?, ?, '{}', 'active')
-		`, waID, flowID, startNode.ID)
-		if err != nil {
+		if err := database.GormDB.Create(&session).Error; err != nil {
 			return err
 		}
 	}
 
 	// 5. Execute Start Node
-	return e.ExecuteNode(waID, *startNode, graph)
+	return e.ExecuteNode(waID, *startNode, *graph)
 }
 
 // ContinueFlow handles user input in an active flow
@@ -69,15 +60,10 @@ func (e *Engine) ContinueFlow(waID string, sessionID int, flowID, currentNodeID 
 	log.Printf("[ContinueFlow] waID=%s, sessionID=%d, flowID=%s, currentNodeID=%s, messageContent='%s'",
 		waID, sessionID, flowID, currentNodeID, messageContent)
 
-	// 1. Fetch Flow Data
-	var graphDataJSON string
-	err := database.DB.QueryRow("SELECT graph_data FROM flows WHERE id = ?", flowID).Scan(&graphDataJSON)
+	// 1. Fetch Graph Data Relationally
+	graph, err := e.LoadGraph(flowID)
 	if err != nil {
-		return err
-	}
-
-	var graph FlowGraphData
-	if err := json.Unmarshal([]byte(graphDataJSON), &graph); err != nil {
+		log.Printf("Error loading graph for flow %s: %v", flowID, err)
 		return err
 	}
 
@@ -191,7 +177,7 @@ func (e *Engine) ContinueFlow(waID string, sessionID int, flowID, currentNodeID 
 
 		if nextNodeID != "" {
 			// Update Session
-			database.DB.Exec("UPDATE conversation_sessions SET current_node = ? WHERE id = ?", nextNodeID, sessionID)
+			database.GormDB.Model(&models.ConversationSession{}).Where("id = ?", sessionID).Update("current_node", nextNodeID)
 
 			// Execute Next Node
 			var nextNode *ReactFlowNode
@@ -209,7 +195,7 @@ func (e *Engine) ContinueFlow(waID string, sessionID int, flowID, currentNodeID 
 			}
 
 			log.Printf("[ContinueFlow] Executing next node: %s (label: %s)", nextNodeID, nextNode.Data.Label)
-			return e.ExecuteNode(waID, *nextNode, graph)
+			return e.ExecuteNode(waID, *nextNode, *graph)
 		} else {
 			// End of Flow?
 			log.Printf("[ContinueFlow] No next node found, terminating session")
@@ -410,33 +396,27 @@ func (e *Engine) ExecuteNode(waID string, node ReactFlowNode, graph FlowGraphDat
 				log.Printf("[ExecuteNode] Chatbot step: Jumping to flow %s, node %s", step.TargetFlowId, step.TargetNodeId)
 
 				// Get current session
-				var sessionID int
-				err := database.DB.QueryRow("SELECT id FROM conversation_sessions WHERE wa_id = ? AND status='active'", waID).Scan(&sessionID)
+				var session models.ConversationSession
+				err := database.GormDB.Where("wa_id = ? AND status='active'", waID).First(&session).Error
 				if err != nil {
 					log.Printf("[ExecuteNode] Error getting session: %v", err)
 					return err
 				}
 
 				// Update session to point to new flow
-				_, err = database.DB.Exec("UPDATE conversation_sessions SET flow_id = ?, current_node = ? WHERE id = ?",
-					step.TargetFlowId, step.TargetNodeId, sessionID)
+				err = database.GormDB.Model(&session).Updates(map[string]interface{}{
+					"flow_id":      step.TargetFlowId,
+					"current_node": step.TargetNodeId,
+				}).Error
 				if err != nil {
 					log.Printf("[ExecuteNode] Error updating session: %v", err)
 					return err
 				}
 
 				// Load target flow
-				var graphDataJSON string
-				err = database.DB.QueryRow("SELECT graph_data FROM flows WHERE id = ?", step.TargetFlowId).Scan(&graphDataJSON)
+				targetGraph, err := e.LoadGraph(step.TargetFlowId)
 				if err != nil {
-					log.Printf("[ExecuteNode] Error loading target flow: %v", err)
-					e.WhatsAppClient.SendMessage(waID, "Error: Target flow not found.")
-					return err
-				}
-
-				var targetGraph FlowGraphData
-				if err := json.Unmarshal([]byte(graphDataJSON), &targetGraph); err != nil {
-					log.Printf("[ExecuteNode] Error parsing target flow: %v", err)
+					log.Printf("[ExecuteNode] Error loading target graph: %v", err)
 					return err
 				}
 
@@ -471,7 +451,7 @@ func (e *Engine) ExecuteNode(waID string, node ReactFlowNode, graph FlowGraphDat
 				}
 
 				// Execute target node
-				return e.ExecuteNode(waID, *targetNode, targetGraph)
+				return e.ExecuteNode(waID, *targetNode, *targetGraph)
 			}
 
 		case "Image":
@@ -498,9 +478,9 @@ func (e *Engine) ExecuteNode(waID string, node ReactFlowNode, graph FlowGraphDat
 	// If NOT waiting for input, automatically move to next Node
 	nextNodeID := e.FindNextNodeID(&node, graph.Edges, "")
 	if nextNodeID != "" {
-		var sessionID int
-		database.DB.QueryRow("SELECT id FROM conversation_sessions WHERE wa_id = ? AND status='active'", waID).Scan(&sessionID)
-		database.DB.Exec("UPDATE conversation_sessions SET current_node = ? WHERE id = ?", nextNodeID, sessionID)
+		var session models.ConversationSession
+		database.GormDB.Where("wa_id = ? AND status='active'", waID).First(&session)
+		database.GormDB.Model(&session).Update("current_node", nextNodeID)
 
 		var nextNode ReactFlowNode
 		for _, n := range graph.Nodes {
@@ -512,49 +492,49 @@ func (e *Engine) ExecuteNode(waID string, node ReactFlowNode, graph FlowGraphDat
 		return e.ExecuteNode(waID, nextNode, graph)
 	} else {
 		// End of Flow
-		var sessionID int
-		database.DB.QueryRow("SELECT id FROM conversation_sessions WHERE wa_id = ? AND status='active'", waID).Scan(&sessionID)
-		e.TerminateSessionByID(sessionID)
+		var session models.ConversationSession
+		database.GormDB.Where("wa_id = ? AND status='active'", waID).First(&session)
+		e.TerminateSessionByID(int(session.ID))
 	}
 
 	return nil
 }
 
 func (e *Engine) TerminateSession(waID string) {
-	database.DB.Exec("UPDATE conversation_sessions SET status = 'completed' WHERE wa_id = ? AND status = 'active'", waID)
+	database.GormDB.Model(&models.ConversationSession{}).Where("wa_id = ? AND status = 'active'", waID).Update("status", "completed")
 }
 
 func (e *Engine) TerminateSessionByID(id int) {
-	database.DB.Exec("UPDATE conversation_sessions SET status = 'completed' WHERE id = ?", id)
+	database.GormDB.Model(&models.ConversationSession{}).Where("id = ?", id).Update("status", "completed")
 }
 
 func (e *Engine) UpdateSessionContext(sessionID int, key, value string) {
-	var contextJSON string
-	database.DB.QueryRow("SELECT context FROM conversation_sessions WHERE id = ?", sessionID).Scan(&contextJSON)
+	var session models.ConversationSession
+	database.GormDB.First(&session, sessionID)
 
 	var context map[string]string
-	if contextJSON == "" {
+	if session.Context == "" {
 		context = make(map[string]string)
 	} else {
-		json.Unmarshal([]byte(contextJSON), &context)
+		json.Unmarshal([]byte(session.Context), &context)
 	}
 
 	context[key] = value
 
 	newContextJSON, _ := json.Marshal(context)
-	database.DB.Exec("UPDATE conversation_sessions SET context = ? WHERE id = ?", string(newContextJSON), sessionID)
+	database.GormDB.Model(&session).Update("context", string(newContextJSON))
 }
 
 func (e *Engine) GetContextInt(sessionID int, key string) int {
-	var contextJSON string
-	database.DB.QueryRow("SELECT context FROM conversation_sessions WHERE id = ?", sessionID).Scan(&contextJSON)
+	var session models.ConversationSession
+	database.GormDB.Select("context").First(&session, sessionID)
 
-	if contextJSON == "" {
+	if session.Context == "" {
 		return 0
 	}
 
 	var context map[string]string
-	if err := json.Unmarshal([]byte(contextJSON), &context); err != nil {
+	if err := json.Unmarshal([]byte(session.Context), &context); err != nil {
 		return 0
 	}
 
@@ -572,18 +552,18 @@ func (e *Engine) GetContextInt(sessionID int, key string) int {
 
 func (e *Engine) ReplaceVariables(waID string, text string) string {
 	// 1. Get Contact Info
-	var name string
-	database.DB.QueryRow("SELECT name FROM contacts WHERE wa_id = ?", waID).Scan(&name)
-	text = strings.ReplaceAll(text, "{{contact.name}}", name)
+	var contact models.Contact
+	database.GormDB.Select("name").Where("wa_id = ?", waID).First(&contact)
+	text = strings.ReplaceAll(text, "{{contact.name}}", contact.Name)
 	text = strings.ReplaceAll(text, "{{contact.phone}}", waID)
 
 	// 2. Get Session Context
-	var contextJSON string
-	database.DB.QueryRow("SELECT context FROM conversation_sessions WHERE wa_id = ? AND status='active'", waID).Scan(&contextJSON)
+	var session models.ConversationSession
+	database.GormDB.Select("context").Where("wa_id = ? AND status='active'", waID).First(&session)
 
-	if contextJSON != "" {
+	if session.Context != "" {
 		var context map[string]string
-		json.Unmarshal([]byte(contextJSON), &context)
+		json.Unmarshal([]byte(session.Context), &context)
 		for k, v := range context {
 			text = strings.ReplaceAll(text, "{{vars."+k+"}}", v)
 		}
@@ -615,4 +595,49 @@ func ToFloat(v interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// LoadGraph reconstructs a FlowGraphData from relational tables
+func (e *Engine) LoadGraph(flowID string) (*FlowGraphData, error) {
+	var nodes []models.FlowNode
+	var edges []models.FlowEdge
+
+	if err := database.GormDB.Where("flow_id = ?", flowID).Find(&nodes).Error; err != nil {
+		return nil, err
+	}
+	if err := database.GormDB.Where("flow_id = ?", flowID).Find(&edges).Error; err != nil {
+		return nil, err
+	}
+
+	graph := &FlowGraphData{
+		Nodes: make([]ReactFlowNode, len(nodes)),
+		Edges: make([]ReactFlowEdge, len(edges)),
+	}
+
+	for i, n := range nodes {
+		var data ReactFlowNodeData
+		if err := json.Unmarshal([]byte(n.Data), &data); err != nil {
+			log.Printf("Error unmarshaling node data: %v", err)
+		}
+		graph.Nodes[i] = ReactFlowNode{
+			ID:   n.NodeID,
+			Type: n.Type,
+			Position: map[string]float64{
+				"x": n.PositionX,
+				"y": n.PositionY,
+			},
+			Data: data,
+		}
+	}
+
+	for i, e := range edges {
+		graph.Edges[i] = ReactFlowEdge{
+			ID:           e.EdgeID,
+			Source:       e.Source,
+			Target:       e.Target,
+			SourceHandle: e.SourceHandle,
+		}
+	}
+
+	return graph, nil
 }

@@ -14,6 +14,12 @@ type Config struct {
 	PhoneNumberID             string
 	WhatsAppBusinessAccountID string
 	DBPath                    string
+	DBHost                    string
+	DBPort                    string
+	DBUser                    string
+	DBPassword                string
+	DBName                    string
+	DBSSLMode                 string
 }
 
 func LoadConfig() *Config {
@@ -29,6 +35,12 @@ func LoadConfig() *Config {
 		PhoneNumberID:             getEnv("PHONE_NUMBER_ID", ""),
 		WhatsAppBusinessAccountID: getEnv("WABA_ID", ""),
 		DBPath:                    getEnv("DB_PATH", "./whatsapp.db"),
+		DBHost:                    getEnv("DB_HOST", "localhost"),
+		DBPort:                    getEnv("DB_PORT", "5432"),
+		DBUser:                    getEnv("DB_USER", "postgres"),
+		DBPassword:                getEnv("DB_PASSWORD", "postgres"),
+		DBName:                    getEnv("DB_NAME", "whatsapp_gateway"),
+		DBSSLMode:                 getEnv("DB_SSLMODE", "disable"),
 	}
 }
 

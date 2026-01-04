@@ -1,11 +1,10 @@
 package api
 
 import (
-	"log"
 	"net/http"
 	"whatsapp-gateway/internal/database"
+	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
-	"whatsapp-gateway/pkg/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,21 +18,10 @@ func NewDashboardHandler(client *whatsapp.Client) *DashboardHandler {
 }
 
 func (h *DashboardHandler) GetMessages(c *gin.Context) {
-	rows, err := database.DB.Query("SELECT id, wa_id, sender, content, type, status, created_at FROM messages ORDER BY created_at DESC")
-	if err != nil {
+	var messages []models.Message
+	if err := database.GormDB.Order("created_at desc").Find(&messages).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	defer rows.Close()
-
-	var messages []models.Message
-	for rows.Next() {
-		var m models.Message
-		if err := rows.Scan(&m.ID, &m.WaID, &m.Sender, &m.Content, &m.Type, &m.Status, &m.CreatedAt); err != nil {
-			log.Printf("Error scanning row: %v", err)
-			continue
-		}
-		messages = append(messages, m)
 	}
 
 	c.JSON(http.StatusOK, messages)

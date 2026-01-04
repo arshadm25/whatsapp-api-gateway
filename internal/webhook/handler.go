@@ -6,9 +6,11 @@ import (
 	"whatsapp-gateway/internal/automation"
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
-	"whatsapp-gateway/pkg/models"
+	"whatsapp-gateway/internal/models"
+	pkgModels "whatsapp-gateway/pkg/models"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type Handler struct {
@@ -41,7 +43,7 @@ func (h *Handler) VerifyWebhook(c *gin.Context) {
 }
 
 func (h *Handler) HandleMessage(c *gin.Context) {
-	var payload models.WebhookPayload
+	var payload pkgModels.WebhookPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		log.Printf("Error binding JSON: %v", err)
 		c.Status(http.StatusBadRequest)
@@ -117,22 +119,32 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 			}
 
 			// Store message in DB
-			stmt, err := database.DB.Prepare("INSERT INTO messages(wa_id, sender, content, type, status) VALUES(?, ?, ?, ?, ?)")
-			if err != nil {
-				log.Printf("Error preparing db statement: %v", err)
-			} else {
-				_, err = stmt.Exec(message.ID, message.From, content, msgType, "received")
-				if err != nil {
-					log.Printf("Error inserting into db: %v", err)
-				}
+			msgModel := models.Message{
+				WaID:    message.ID,
+				Sender:  message.From,
+				Content: content,
+				Type:    msgType,
+				Status:  "received",
+			}
+			if err := database.GormDB.Create(&msgModel).Error; err != nil {
+				log.Printf("Error inserting into db: %v", err)
 			}
 
 			// Auto-save Contact
-			userName := message.From
-			_, err = database.DB.Exec(`INSERT INTO contacts(wa_id, name, tags) VALUES(?, ?, '[]') 
-				ON CONFLICT(wa_id) DO UPDATE SET name=excluded.name WHERE name IS NULL OR name = ''`, message.From, userName)
-			if err != nil {
-				log.Printf("Error saving contact: %v", err)
+			var contact models.Contact
+			err := database.GormDB.Where("wa_id = ?", message.From).First(&contact).Error
+			if err == gorm.ErrRecordNotFound {
+				contact = models.Contact{
+					WaID: message.From,
+					Name: message.From, // Default to phone number
+					Tags: "[]",
+				}
+				database.GormDB.Create(&contact)
+			} else if err == nil {
+				if contact.Name == "" || contact.Name == contact.WaID {
+					// Update name if currently empty or just the phone number
+					database.GormDB.Model(&contact).Update("name", message.From)
+				}
 			}
 
 			// Process through automation engine (text and interactive messages)

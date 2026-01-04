@@ -11,6 +11,7 @@ import (
 	"strings"
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
+	"whatsapp-gateway/internal/models"
 )
 
 type Client struct {
@@ -285,10 +286,15 @@ func (c *Client) SendRawMessage(msg GenericMessage) error {
 	// Log to DB (Fire and forget or simple log)
 	// Store the recipient phone number in 'sender' field so we can group conversations properly
 	go func() {
-		stmt, err := database.DB.Prepare("INSERT INTO messages(wa_id, sender, content, type, status) VALUES(?, ?, ?, ?, ?)")
-		if err == nil {
-			stmt.Exec("outgoing-"+msg.To, msg.To, content, msg.Type, "sent")
-			stmt.Close()
+		msgModel := models.Message{
+			WaID:    "outgoing-" + msg.To,
+			Sender:  msg.To,
+			Content: content,
+			Type:    msg.Type,
+			Status:  "sent",
+		}
+		if err := database.GormDB.Create(&msgModel).Error; err != nil {
+			fmt.Printf("Error logging outgoing message: %v\n", err)
 		}
 	}()
 

@@ -14,7 +14,7 @@ import (
 
 func main() {
 	cfg := config.LoadConfig()
-	database.InitDB(cfg.DBPath)
+	database.InitGorm(cfg)
 
 	r := gin.Default()
 

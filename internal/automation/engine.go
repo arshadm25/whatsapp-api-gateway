@@ -2,12 +2,15 @@ package automation
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
 	"whatsapp-gateway/internal/database"
+	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
-	"whatsapp-gateway/pkg/models"
+
+	"gorm.io/gorm"
 )
 
 type Engine struct {
@@ -34,51 +37,33 @@ type Action struct {
 // ProcessIncomingMessage processes a message through automation rules
 func (e *Engine) ProcessIncomingMessage(waID, messageContent string) error {
 	// 0. Check if user is in an active Flow Session
-	var sessionID int
-	var flowID string // TEXT
-	var currentNodeID string
-	err := database.DB.QueryRow(`
-		SELECT id, flow_id, current_node 
-		FROM conversation_sessions 
-		WHERE wa_id = ? AND status = 'active'
-	`, waID).Scan(&sessionID, &flowID, &currentNodeID)
+	var session models.ConversationSession
+	err := database.GormDB.Where("wa_id = ? AND status = 'active'", waID).First(&session).Error
 
 	if err == nil {
 		// Active, continue flow
-		log.Printf("[Flow] Continuing flow %s for %s at node %s", flowID, waID, currentNodeID)
-		return e.ContinueFlow(waID, sessionID, flowID, currentNodeID, messageContent)
+		log.Printf("[Flow] Continuing flow %s for %s at node %s", session.FlowID, waID, session.CurrentNode)
+		return e.ContinueFlow(waID, int(session.ID), session.FlowID, session.CurrentNode, messageContent)
 	}
 
 	// 1. Fetch all enabled rules ordered by priority
-	rows, err := database.DB.Query(`
-		SELECT id, name, type, conditions, actions 
-		FROM automation_rules 
-		WHERE enabled = 1 
-		ORDER BY priority DESC
-	`)
-	if err != nil {
+	var rules []models.AutomationRule
+	if err := database.GormDB.Where("enabled = ?", true).Order("priority DESC, created_at DESC").Find(&rules).Error; err != nil {
 		log.Printf("Error fetching automation rules: %v", err)
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var rule models.AutomationRule
-		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Type, &rule.Conditions, &rule.Actions); err != nil {
-			log.Printf("Error scanning rule: %v", err)
-			continue
-		}
-
+	for _, rule := range rules {
 		// Check if rule conditions match
 		if e.evaluateConditions(rule.Conditions, waID, messageContent) {
 			log.Printf("Rule '%s' matched for message from %s", rule.Name, waID)
 
 			// Execute actions
-			if err := e.executeActions(rule.ID, rule.Actions, waID, messageContent); err != nil {
+			if err := e.executeActions(int(rule.ID), rule.Actions, waID, messageContent); err != nil {
 				log.Printf("Error executing actions for rule %s: %v", rule.Name, err)
-				e.logAutomation(rule.ID, waID, rule.Type, "action_failed", false, err.Error())
+				e.logAutomation(int(rule.ID), waID, rule.Type, "action_failed", false, err.Error())
 			} else {
-				e.logAutomation(rule.ID, waID, rule.Type, "action_executed", true, "")
+				e.logAutomation(int(rule.ID), waID, rule.Type, "action_executed", true, "")
 			}
 
 			// For now, stop after first matching rule (can be configurable)
@@ -87,13 +72,13 @@ func (e *Engine) ProcessIncomingMessage(waID, messageContent string) error {
 	}
 
 	// TEMPORARY: Hardcoded Trigger for testing new Flows
-	// If message is "test flow", start the latest edited flow
+	// If message is "test" or "start", start the latest edited flow
 	if strings.ToLower(messageContent) == "test" || strings.ToLower(messageContent) == "start" {
-		var latestFlowID string
-		err := database.DB.QueryRow("SELECT id FROM flows ORDER BY updated_at DESC LIMIT 1").Scan(&latestFlowID)
-		if err == nil && latestFlowID != "" {
-			log.Printf("[TEST] Starting latest flow: %s", latestFlowID)
-			return e.StartFlow(waID, latestFlowID)
+		var latestFlow models.Flow
+		err := database.GormDB.Order("updated_at DESC").First(&latestFlow).Error
+		if err == nil && latestFlow.ID != "" {
+			log.Printf("[TEST] Starting latest flow: %s", latestFlow.ID)
+			return e.StartFlow(waID, latestFlow.ID)
 		}
 	}
 
@@ -160,12 +145,12 @@ func (e *Engine) matchKeyword(message, operator, value string) bool {
 
 // hasContactTag checks if contact has a specific tag
 func (e *Engine) hasContactTag(waID, tag string) bool {
-	var tags string
-	err := database.DB.QueryRow("SELECT tags FROM contacts WHERE wa_id = ?", waID).Scan(&tags)
+	var contact models.Contact
+	err := database.GormDB.Select("tags").Where("wa_id = ?", waID).First(&contact).Error
 	if err != nil {
 		return false
 	}
-	return strings.Contains(tags, tag)
+	return strings.Contains(contact.Tags, tag)
 }
 
 // executeActions executes all actions for a matched rule
@@ -213,9 +198,6 @@ func (e *Engine) executeSingleAction(action Action, waID, messageContent string)
 
 		// Legacy support (integer IDs)
 		if flowID, ok := action.Params["flow_id"].(float64); ok {
-			// Try to start using new engine mostly, or legacy path?
-			// Since we updated conversation_sessions, sticking to legacy session creation MIGHT break if we mix engines.
-			// But for now, let's keep legacy call if it exists.
 			return e.startChatbotFlow(waID, int(flowID))
 		}
 		return nil
@@ -229,14 +211,17 @@ func (e *Engine) executeSingleAction(action Action, waID, messageContent string)
 
 // addTagToContact adds a tag to a contact
 func (e *Engine) addTagToContact(waID, tag string) error {
-	var currentTags string
-	err := database.DB.QueryRow("SELECT tags FROM contacts WHERE wa_id = ?", waID).Scan(&currentTags)
-	if err != nil {
-		currentTags = "[]"
+	var contact models.Contact
+	err := database.GormDB.Where("wa_id = ?", waID).First(&contact).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+	if err == gorm.ErrRecordNotFound {
+		contact = models.Contact{WaID: waID, Tags: "[]"}
 	}
 
 	var tags []string
-	json.Unmarshal([]byte(currentTags), &tags)
+	json.Unmarshal([]byte(contact.Tags), &tags)
 
 	// Check if tag already exists
 	for _, t := range tags {
@@ -247,32 +232,39 @@ func (e *Engine) addTagToContact(waID, tag string) error {
 
 	tags = append(tags, tag)
 	newTags, _ := json.Marshal(tags)
+	contact.Tags = string(newTags)
 
-	_, err = database.DB.Exec("UPDATE contacts SET tags = ? WHERE wa_id = ?", string(newTags), waID)
-	return err
+	return database.GormDB.Save(&contact).Error
 }
 
 // startChatbotFlow initiates a chatbot conversation flow
 func (e *Engine) startChatbotFlow(waID string, flowID int) error {
-	// Create a new conversation session
-	_, err := database.DB.Exec(`
-		INSERT INTO conversation_sessions (wa_id, flow_id, current_node, context, status)
-		VALUES (?, ?, 'start', '{}', 'active')
-	`, waID, flowID)
+	session := models.ConversationSession{
+		WaID:        waID,
+		FlowID:      fmt.Sprintf("%d", flowID),
+		CurrentNode: "start",
+		Context:     "{}",
+		Status:      "active",
+	}
 
+	err := database.GormDB.Create(&session).Error
 	if err != nil {
 		return err
 	}
 
-	// TODO: Send first message from flow
 	log.Printf("Started flow %d for contact %s", flowID, waID)
 	return nil
 }
 
 // logAutomation logs automation execution
 func (e *Engine) logAutomation(ruleID int, waID, triggerType, actionTaken string, success bool, errorMsg string) {
-	database.DB.Exec(`
-		INSERT INTO automation_logs (rule_id, wa_id, trigger_type, action_taken, success, error_message)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, ruleID, waID, triggerType, actionTaken, success, errorMsg)
+	logEntry := models.AutomationLog{
+		RuleID:       uint(ruleID),
+		WaID:         waID,
+		TriggerType:  triggerType,
+		ActionTaken:  actionTaken,
+		Success:      success,
+		ErrorMessage: errorMsg,
+	}
+	database.GormDB.Create(&logEntry)
 }

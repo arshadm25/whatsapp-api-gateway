@@ -1,14 +1,13 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
+	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
-	"whatsapp-gateway/pkg/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -81,13 +80,17 @@ func (h *BroadcastHandler) SyncTemplates(c *gin.Context) {
 			}
 		}
 
+		template := models.Template{
+			ID:         id,
+			Name:       name,
+			Language:   language,
+			Category:   category,
+			Status:     status,
+			Components: componentsJSON,
+		}
+
 		// Upsert into database
-		_, err = database.DB.Exec(`INSERT INTO templates(id, name, language, category, status, components) 
-			VALUES(?, ?, ?, ?, ?, ?) 
-			ON CONFLICT(id) DO UPDATE SET name=excluded.name, language=excluded.language, 
-			category=excluded.category, status=excluded.status, components=excluded.components`,
-			id, name, language, category, status, componentsJSON)
-		if err != nil {
+		if err := database.GormDB.Save(&template).Error; err != nil {
 			log.Printf("Error saving template %s: %v", name, err)
 			continue
 		}
@@ -114,30 +117,10 @@ func (h *BroadcastHandler) GetTemplatesFromMeta(c *gin.Context) {
 
 // GetTemplates returns stored templates from local database
 func (h *BroadcastHandler) GetTemplates(c *gin.Context) {
-	rows, err := database.DB.Query("SELECT id, name, language, category, status, components FROM templates")
-	if err != nil {
+	var templates []models.Template
+	if err := database.GormDB.Find(&templates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-	defer rows.Close()
-
-	var templates []models.Template
-	for rows.Next() {
-		var t models.Template
-		var components sql.NullString
-		if err := rows.Scan(&t.ID, &t.Name, &t.Language, &t.Category, &t.Status, &components); err != nil {
-			log.Printf("Error scanning template: %v", err)
-			continue
-		}
-		if components.Valid {
-			t.Components = components.String
-		}
-		templates = append(templates, t)
-	}
-
-	// Return empty array instead of null
-	if templates == nil {
-		templates = []models.Template{}
 	}
 
 	c.JSON(http.StatusOK, templates)
