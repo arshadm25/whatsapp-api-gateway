@@ -33,7 +33,23 @@ type Action struct {
 
 // ProcessIncomingMessage processes a message through automation rules
 func (e *Engine) ProcessIncomingMessage(waID, messageContent string) error {
-	// Fetch all enabled rules ordered by priority
+	// 0. Check if user is in an active Flow Session
+	var sessionID int
+	var flowID string // TEXT
+	var currentNodeID string
+	err := database.DB.QueryRow(`
+		SELECT id, flow_id, current_node 
+		FROM conversation_sessions 
+		WHERE wa_id = ? AND status = 'active'
+	`, waID).Scan(&sessionID, &flowID, &currentNodeID)
+
+	if err == nil {
+		// Active, continue flow
+		log.Printf("[Flow] Continuing flow %s for %s at node %s", flowID, waID, currentNodeID)
+		return e.ContinueFlow(waID, sessionID, flowID, currentNodeID, messageContent)
+	}
+
+	// 1. Fetch all enabled rules ordered by priority
 	rows, err := database.DB.Query(`
 		SELECT id, name, type, conditions, actions 
 		FROM automation_rules 
@@ -67,6 +83,17 @@ func (e *Engine) ProcessIncomingMessage(waID, messageContent string) error {
 
 			// For now, stop after first matching rule (can be configurable)
 			break
+		}
+	}
+
+	// TEMPORARY: Hardcoded Trigger for testing new Flows
+	// If message is "test flow", start the latest edited flow
+	if strings.ToLower(messageContent) == "test" || strings.ToLower(messageContent) == "start" {
+		var latestFlowID string
+		err := database.DB.QueryRow("SELECT id FROM flows ORDER BY updated_at DESC LIMIT 1").Scan(&latestFlowID)
+		if err == nil && latestFlowID != "" {
+			log.Printf("[TEST] Starting latest flow: %s", latestFlowID)
+			return e.StartFlow(waID, latestFlowID)
 		}
 	}
 
@@ -179,11 +206,19 @@ func (e *Engine) executeSingleAction(action Action, waID, messageContent string)
 		return e.addTagToContact(waID, tag)
 
 	case "start_flow":
-		flowID, ok := action.Params["flow_id"].(float64)
-		if !ok {
-			return nil
+		// Support new string-based Flow IDs (UUIDs)
+		if flowID, ok := action.Params["flow_id"].(string); ok {
+			return e.StartFlow(waID, flowID)
 		}
-		return e.startChatbotFlow(waID, int(flowID))
+
+		// Legacy support (integer IDs)
+		if flowID, ok := action.Params["flow_id"].(float64); ok {
+			// Try to start using new engine mostly, or legacy path?
+			// Since we updated conversation_sessions, sticking to legacy session creation MIGHT break if we mix engines.
+			// But for now, let's keep legacy call if it exists.
+			return e.startChatbotFlow(waID, int(flowID))
+		}
+		return nil
 
 	default:
 		log.Printf("Unknown action type: %s", action.Type)

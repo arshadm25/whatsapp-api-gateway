@@ -104,7 +104,7 @@ func InitDB(dbPath string) {
 	createConversationSessionsSQL := `CREATE TABLE IF NOT EXISTS conversation_sessions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		wa_id TEXT NOT NULL,
-		flow_id INTEGER,
+		flow_id TEXT,
 		current_node TEXT,
 		context TEXT,
 		status TEXT DEFAULT 'active',

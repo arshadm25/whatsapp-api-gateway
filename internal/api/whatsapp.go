@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"time"
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/whatsapp"
 
@@ -392,4 +393,79 @@ func (h *WhatsAppHandler) DeleteFlow(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// --- Local Flow Storage ---
+
+// SaveLocalFlow saves a flow to local DB
+func (h *WhatsAppHandler) SaveLocalFlow(c *gin.Context) {
+	var req struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		GraphData string `json:"graph_data"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.ID == "" {
+		req.ID = fmt.Sprintf("flow_%d", time.Now().Unix())
+	}
+
+	_, err := database.DB.Exec(`
+		INSERT INTO flows (id, name, status, graph_data) 
+		VALUES (?, ?, 'draft', ?)
+		ON CONFLICT(id) DO UPDATE SET 
+			name=excluded.name, 
+			graph_data=excluded.graph_data, 
+			updated_at=CURRENT_TIMESTAMP
+	`, req.ID, req.Name, req.GraphData)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"id": req.ID, "status": "saved"})
+}
+
+// GetLocalFlows lists local flows
+func (h *WhatsAppHandler) GetLocalFlows(c *gin.Context) {
+	rows, err := database.DB.Query("SELECT id, name, updated_at FROM flows ORDER BY updated_at DESC")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var flows []gin.H
+	for rows.Next() {
+		var id, name, updatedAt string
+		if err := rows.Scan(&id, &name, &updatedAt); err != nil {
+			continue
+		}
+		flows = append(flows, gin.H{"id": id, "name": name, "updated_at": updatedAt})
+	}
+	if flows == nil {
+		flows = []gin.H{}
+	}
+	c.JSON(http.StatusOK, flows)
+}
+
+// GetLocalFlow gets a single local flow
+func (h *WhatsAppHandler) GetLocalFlow(c *gin.Context) {
+	id := c.Param("id")
+	var name, graphData string
+	err := database.DB.QueryRow("SELECT name, graph_data FROM flows WHERE id = ?", id).Scan(&name, &graphData)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":         id,
+		"name":       name,
+		"graph_data": json.RawMessage(graphData),
+	})
 }

@@ -87,6 +87,11 @@ func main() {
 			whatsappGroup.POST("/templates", whatsappHandler.CreateTemplate)
 			whatsappGroup.DELETE("/templates", whatsappHandler.DeleteTemplate)
 
+			// Local Flow Routes
+			whatsappGroup.GET("/flows/local", whatsappHandler.GetLocalFlows)
+			whatsappGroup.POST("/flows/local", whatsappHandler.SaveLocalFlow)
+			whatsappGroup.GET("/flows/local/:id", whatsappHandler.GetLocalFlow)
+
 			// WhatsApp Flow Routes
 			whatsappGroup.GET("/flows", whatsappHandler.GetFlows)
 			whatsappGroup.POST("/flows", whatsappHandler.CreateFlow)
