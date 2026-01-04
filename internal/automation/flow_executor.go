@@ -81,6 +81,13 @@ func (e *Engine) ContinueFlow(waID string, sessionID int, flowID, currentNodeID 
 		return err
 	}
 
+	// Log all nodes in graph for debugging
+	nodeIDs := []string{}
+	for _, node := range graph.Nodes {
+		nodeIDs = append(nodeIDs, node.ID)
+	}
+	log.Printf("[ContinueFlow] Graph has %d nodes: %v", len(graph.Nodes), nodeIDs)
+
 	// 2. Find Current Node
 	var currentNode *ReactFlowNode
 	for _, node := range graph.Nodes {
@@ -178,23 +185,34 @@ func (e *Engine) ContinueFlow(waID string, sessionID int, flowID, currentNodeID 
 		}
 
 		// 4. Find Next Node via Edges
+		log.Printf("[ContinueFlow] Finding next node for current node: %s", currentNodeID)
 		nextNodeID := e.FindNextNodeID(currentNode, graph.Edges, messageContent)
+		log.Printf("[ContinueFlow] Next node ID: %s", nextNodeID)
 
 		if nextNodeID != "" {
 			// Update Session
 			database.DB.Exec("UPDATE conversation_sessions SET current_node = ? WHERE id = ?", nextNodeID, sessionID)
 
 			// Execute Next Node
-			var nextNode ReactFlowNode
+			var nextNode *ReactFlowNode
 			for _, n := range graph.Nodes {
 				if n.ID == nextNodeID {
-					nextNode = n
+					nextNode = &n
 					break
 				}
 			}
-			return e.ExecuteNode(waID, nextNode, graph)
+
+			if nextNode == nil {
+				log.Printf("[ContinueFlow] ERROR: Next node %s not found in graph!", nextNodeID)
+				e.TerminateSessionByID(sessionID)
+				return fmt.Errorf("next node not found: %s", nextNodeID)
+			}
+
+			log.Printf("[ContinueFlow] Executing next node: %s (label: %s)", nextNodeID, nextNode.Data.Label)
+			return e.ExecuteNode(waID, *nextNode, graph)
 		} else {
 			// End of Flow?
+			log.Printf("[ContinueFlow] No next node found, terminating session")
 			e.TerminateSessionByID(sessionID)
 			return nil
 		}

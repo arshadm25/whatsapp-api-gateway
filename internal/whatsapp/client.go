@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
 )
@@ -245,7 +246,38 @@ func (c *Client) SendRawMessage(msg GenericMessage) error {
 			content += ":" + msg.Document.Filename
 		}
 	} else if msg.Interactive != nil {
-		content = fmt.Sprintf("[interactive]:%s", msg.Interactive.Type)
+		// Extract the body text from interactive messages
+		bodyText := ""
+		if msg.Interactive.Body.Text != "" {
+			bodyText = msg.Interactive.Body.Text
+		}
+		if msg.Interactive.Type == "button" {
+			// List button titles
+			buttonLabels := []string{}
+			for _, btn := range msg.Interactive.Action.Buttons {
+				buttonLabels = append(buttonLabels, btn.Reply.Title)
+			}
+			if len(buttonLabels) > 0 {
+				content = fmt.Sprintf("%s\n\n%s", bodyText, strings.Join(buttonLabels, "\n"))
+			} else {
+				content = bodyText
+			}
+		} else if msg.Interactive.Type == "list" {
+			// List option titles
+			optionLabels := []string{}
+			for _, section := range msg.Interactive.Action.Sections {
+				for _, row := range section.Rows {
+					optionLabels = append(optionLabels, row.Title)
+				}
+			}
+			if len(optionLabels) > 0 {
+				content = fmt.Sprintf("%s\n\n%s", bodyText, strings.Join(optionLabels, "\n"))
+			} else {
+				content = bodyText
+			}
+		} else {
+			content = fmt.Sprintf("%s [interactive:%s]", bodyText, msg.Interactive.Type)
+		}
 	} else {
 		content = fmt.Sprintf("%s message", msg.Type)
 	}
