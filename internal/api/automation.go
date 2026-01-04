@@ -234,3 +234,35 @@ func (h *AutomationHandler) TerminateSession(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "Session terminated successfully"})
 }
+
+// GetSettings returns all system settings
+func (h *AutomationHandler) GetSettings(c *gin.Context) {
+	var settings []models.SystemSetting
+	if err := database.GormDB.Find(&settings).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+// UpdateSetting updates a specific system setting
+func (h *AutomationHandler) UpdateSetting(c *gin.Context) {
+	var req struct {
+		Key   string `json:"key" binding:"required"`
+		Value string `json:"value" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := database.GormDB.Model(&models.SystemSetting{}).
+		Where("key = ?", req.Key).
+		Update("value", req.Value).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Setting updated successfully. Please restart server for some changes to take effect."})
+}

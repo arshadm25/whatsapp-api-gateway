@@ -185,3 +185,15 @@ type FlowEdge struct {
 func (FlowEdge) TableName() string {
 	return "flow_edges"
 }
+
+// SystemSetting represents a key-value setting stored in the database
+type SystemSetting struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Key       string    `gorm:"type:varchar(255);uniqueIndex;not null" json:"key"`
+	Value     string    `gorm:"type:text" json:"value"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+}
+
+func (SystemSetting) TableName() string {
+	return "system_settings"
+}

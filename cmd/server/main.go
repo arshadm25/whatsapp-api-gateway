@@ -15,6 +15,7 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 	database.InitGorm(cfg)
+	database.SyncConfig(cfg)
 
 	r := gin.Default()
 
@@ -76,6 +77,8 @@ func main() {
 		apiGroup.GET("/automation/sessions", automationHandler.GetActiveSessions)
 		apiGroup.GET("/automation/sessions/:wa_id/messages", automationHandler.GetSessionMessages)
 		apiGroup.DELETE("/automation/sessions/:id", automationHandler.TerminateSession)
+		apiGroup.GET("/settings", automationHandler.GetSettings)
+		apiGroup.POST("/settings", automationHandler.UpdateSetting)
 
 		// WhatsApp Direct API Routes
 		whatsappGroup := apiGroup.Group("/whatsapp")
