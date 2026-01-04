@@ -91,6 +91,7 @@ func main() {
 			whatsappGroup.GET("/flows/local", whatsappHandler.GetLocalFlows)
 			whatsappGroup.POST("/flows/local", whatsappHandler.SaveLocalFlow)
 			whatsappGroup.GET("/flows/local/:id", whatsappHandler.GetLocalFlow)
+			whatsappGroup.DELETE("/flows/local/:id", whatsappHandler.DeleteLocalFlow)
 
 			// WhatsApp Flow Routes
 			whatsappGroup.GET("/flows", whatsappHandler.GetFlows)

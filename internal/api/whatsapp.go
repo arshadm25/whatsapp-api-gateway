@@ -469,3 +469,22 @@ func (h *WhatsAppHandler) GetLocalFlow(c *gin.Context) {
 		"graph_data": json.RawMessage(graphData),
 	})
 }
+
+// DeleteLocalFlow deletes a local flow
+func (h *WhatsAppHandler) DeleteLocalFlow(c *gin.Context) {
+	id := c.Param("id")
+
+	result, err := database.DB.Exec("DELETE FROM flows WHERE id = ?", id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Flow not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
