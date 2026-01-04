@@ -26,15 +26,24 @@ type StepValidation struct {
 
 // ReactFlowStep represents a step within a node (e.g. Text, Image)
 type ReactFlowStep struct {
-	Type       string          `json:"type"`
-	Content    string          `json:"content"`
-	Variable   string          `json:"variable"` // For saving input
-	Buttons    []QuickReplyBtn `json:"buttons,omitempty"`
-	Validation *StepValidation `json:"validation,omitempty"`
+	Type         string          `json:"type"`
+	Content      string          `json:"content"`
+	Variable     string          `json:"variable"` // For saving input
+	Buttons      []QuickReplyBtn `json:"buttons,omitempty"`
+	Options      []ListOption    `json:"options,omitempty"`    // For List messages
+	ButtonText   string          `json:"buttonText,omitempty"` // For List button text
+	Validation   *StepValidation `json:"validation,omitempty"`
+	TargetFlowId string          `json:"targetFlowId,omitempty"` // For Chatbot step
+	TargetNodeId string          `json:"targetNodeId,omitempty"` // For Chatbot step
 }
 
 type QuickReplyBtn struct {
 	Label string `json:"label"`
+}
+
+type ListOption struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
 }
 
 // ReactFlowEdge represents an edge connection

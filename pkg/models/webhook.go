@@ -49,9 +49,23 @@ type MediaMessage struct {
 
 // InteractiveMessage represents an interactive message response (buttons, flows)
 type InteractiveMessage struct {
-	Type     string    `json:"type"`
-	NfmReply *NfmReply `json:"nfm_reply,omitempty"` // For Flows
-	// Add other interactive types like button_reply, list_reply as needed
+	Type        string       `json:"type"`
+	ButtonReply *ButtonReply `json:"button_reply,omitempty"` // For button clicks
+	ListReply   *ListReply   `json:"list_reply,omitempty"`   // For list selections
+	NfmReply    *NfmReply    `json:"nfm_reply,omitempty"`    // For Flows
+}
+
+// ButtonReply represents a button click response
+type ButtonReply struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+// ListReply represents a list selection response
+type ListReply struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
 }
 
 // NfmReply represents a response from a WhatsApp Flow

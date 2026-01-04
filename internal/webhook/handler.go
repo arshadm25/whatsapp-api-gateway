@@ -93,7 +93,15 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 				log.Printf("Received document from %s", message.From)
 			case "interactive":
 				if message.Interactive != nil {
-					if message.Interactive.Type == "nfm_reply" && message.Interactive.NfmReply != nil {
+					if message.Interactive.Type == "button_reply" && message.Interactive.ButtonReply != nil {
+						// User clicked a button - use the button title as the message content
+						content = message.Interactive.ButtonReply.Title
+						log.Printf("Received button click from %s: %s (ID: %s)", message.From, content, message.Interactive.ButtonReply.ID)
+					} else if message.Interactive.Type == "list_reply" && message.Interactive.ListReply != nil {
+						// User selected from a list
+						content = message.Interactive.ListReply.Title
+						log.Printf("Received list selection from %s: %s", message.From, content)
+					} else if message.Interactive.Type == "nfm_reply" && message.Interactive.NfmReply != nil {
 						// This is a Flow response
 						reply := message.Interactive.NfmReply
 						content = "[flow_response]:" + reply.ResponsePayload
@@ -127,9 +135,21 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 				log.Printf("Error saving contact: %v", err)
 			}
 
-			// Process through automation engine (only for text messages)
-			if h.AutomationEngine != nil && message.Type == "text" {
-				go h.AutomationEngine.ProcessIncomingMessage(message.From, message.Text.Body)
+			// Process through automation engine (text and interactive messages)
+			if h.AutomationEngine != nil {
+				// Determine the message content to process
+				var messageContent string
+				if message.Type == "text" {
+					messageContent = message.Text.Body
+				} else if message.Type == "interactive" && content != "" {
+					// For interactive messages, use the extracted content (button title, list selection, etc.)
+					messageContent = content
+				}
+
+				// Process if we have content
+				if messageContent != "" {
+					go h.AutomationEngine.ProcessIncomingMessage(message.From, messageContent)
+				}
 			}
 		}
 	}

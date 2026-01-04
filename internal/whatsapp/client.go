@@ -275,6 +275,60 @@ func (c *Client) SendMessage(to, body string) error {
 	return c.SendRawMessage(msg)
 }
 
+// SendInteractiveButtons sends an interactive message with reply buttons (max 3)
+func (c *Client) SendInteractiveButtons(to, bodyText string, buttons []ButtonObj) error {
+	if len(buttons) > 3 {
+		return fmt.Errorf("WhatsApp allows maximum 3 buttons, got %d", len(buttons))
+	}
+
+	msg := GenericMessage{
+		MessagingProduct: "whatsapp",
+		To:               to,
+		Type:             "interactive",
+		Interactive: &InteractiveObj{
+			Type: "button",
+			Body: BodyObj{
+				Text: bodyText,
+			},
+			Action: ActionObj{
+				Buttons: buttons,
+			},
+		},
+	}
+	return c.SendRawMessage(msg)
+}
+
+// SendInteractiveList sends an interactive list message (max 10 options)
+func (c *Client) SendInteractiveList(to, bodyText, buttonText string, options []RowObj) error {
+	if len(options) > 10 {
+		return fmt.Errorf("WhatsApp allows maximum 10 list options, got %d", len(options))
+	}
+	if len(options) == 0 {
+		return fmt.Errorf("list must have at least 1 option")
+	}
+
+	msg := GenericMessage{
+		MessagingProduct: "whatsapp",
+		To:               to,
+		Type:             "interactive",
+		Interactive: &InteractiveObj{
+			Type: "list",
+			Body: BodyObj{
+				Text: bodyText,
+			},
+			Action: ActionObj{
+				Button: buttonText,
+				Sections: []SectionObj{
+					{
+						Rows: options,
+					},
+				},
+			},
+		},
+	}
+	return c.SendRawMessage(msg)
+}
+
 func (c *Client) SendTemplateMessage(to, templateName, languageCode string) error {
 	msg := GenericMessage{
 		MessagingProduct: "whatsapp",
