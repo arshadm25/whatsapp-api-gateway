@@ -12,14 +12,16 @@ import (
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/models"
+	"whatsapp-gateway/internal/ws"
 )
 
 type Client struct {
 	Config *config.Config
+	Hub    *ws.Hub
 }
 
-func NewClient(cfg *config.Config) *Client {
-	return &Client{Config: cfg}
+func NewClient(cfg *config.Config, hub *ws.Hub) *Client {
+	return &Client{Config: cfg, Hub: hub}
 }
 
 // --- Message Structures ---
@@ -297,6 +299,11 @@ func (c *Client) SendRawMessage(msg GenericMessage) error {
 		}
 		if err := database.GormDB.Create(&msgModel).Error; err != nil {
 			fmt.Printf("Error logging outgoing message: %v\n", err)
+		} else {
+			// Broadcast via WebSocket
+			if c.Hub != nil {
+				c.Hub.NotifyMessage(msgModel)
+			}
 		}
 	}()
 

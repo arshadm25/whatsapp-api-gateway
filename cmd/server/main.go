@@ -8,6 +8,7 @@ import (
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/webhook"
 	"whatsapp-gateway/internal/whatsapp"
+	"whatsapp-gateway/internal/ws"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,9 +35,12 @@ func main() {
 		c.Next()
 	})
 
-	whatsappClient := whatsapp.NewClient(cfg)
-	automationEngine := automation.NewEngine(whatsappClient)
-	webhookHandler := webhook.NewHandler(cfg, automationEngine)
+	hub := ws.NewHub()
+	go hub.Run()
+
+	whatsappClient := whatsapp.NewClient(cfg, hub)
+	automationEngine := automation.NewEngine(whatsappClient, hub)
+	webhookHandler := webhook.NewHandler(cfg, automationEngine, hub)
 	dashboardHandler := api.NewDashboardHandler(whatsappClient)
 	contactHandler := api.NewContactHandler()
 	broadcastHandler := api.NewBroadcastHandler(whatsappClient, cfg)
@@ -46,6 +50,11 @@ func main() {
 	// Webhook Routes
 	r.GET("/webhook", webhookHandler.VerifyWebhook)
 	r.POST("/webhook", webhookHandler.HandleMessage)
+
+	// WebSocket Route
+	r.GET("/ws", func(c *gin.Context) {
+		hub.ServeWs(c.Writer, c.Request)
+	})
 
 	// Dashboard API Routes
 	apiGroup := r.Group("/api")

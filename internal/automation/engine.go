@@ -9,16 +9,18 @@ import (
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
+	"whatsapp-gateway/internal/ws"
 
 	"gorm.io/gorm"
 )
 
 type Engine struct {
 	WhatsAppClient *whatsapp.Client
+	Hub            *ws.Hub
 }
 
-func NewEngine(client *whatsapp.Client) *Engine {
-	return &Engine{WhatsAppClient: client}
+func NewEngine(client *whatsapp.Client, hub *ws.Hub) *Engine {
+	return &Engine{WhatsAppClient: client, Hub: hub}
 }
 
 // Condition represents a rule condition

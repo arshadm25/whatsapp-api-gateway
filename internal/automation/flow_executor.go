@@ -44,11 +44,18 @@ func (e *Engine) StartFlow(waID string, flowID string) error {
 		Status:      "active",
 	}
 
-	if err := database.GormDB.Create(&session).Error; err != nil {
+	if err := database.GormDB.Create(&session).Error; err == nil {
+		if e.Hub != nil {
+			e.Hub.NotifySession(session)
+		}
+	} else {
 		// If existing active session, terminate it and try again.
 		e.TerminateSession(waID)
 		if err := database.GormDB.Create(&session).Error; err != nil {
 			return err
+		}
+		if e.Hub != nil {
+			e.Hub.NotifySession(session)
 		}
 	}
 
@@ -179,6 +186,14 @@ func (e *Engine) ContinueFlow(waID string, sessionID int, flowID, currentNodeID 
 		if nextNodeID != "" {
 			// Update Session
 			database.GormDB.Model(&models.ConversationSession{}).Where("id = ?", sessionID).Update("current_node", nextNodeID)
+
+			// Broadcast session update
+			if e.Hub != nil {
+				var updatedSession models.ConversationSession
+				if err := database.GormDB.First(&updatedSession, sessionID).Error; err == nil {
+					e.Hub.NotifySession(updatedSession)
+				}
+			}
 
 			// Execute Next Node
 			var nextNode *ReactFlowNode

@@ -7,6 +7,7 @@ import (
 	"whatsapp-gateway/internal/config"
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/models"
+	"whatsapp-gateway/internal/ws"
 	pkgModels "whatsapp-gateway/pkg/models"
 
 	"github.com/gin-gonic/gin"
@@ -16,12 +17,14 @@ import (
 type Handler struct {
 	Config           *config.Config
 	AutomationEngine *automation.Engine
+	Hub              *ws.Hub
 }
 
-func NewHandler(cfg *config.Config, automationEngine *automation.Engine) *Handler {
+func NewHandler(cfg *config.Config, automationEngine *automation.Engine, hub *ws.Hub) *Handler {
 	return &Handler{
 		Config:           cfg,
 		AutomationEngine: automationEngine,
+		Hub:              hub,
 	}
 }
 
@@ -128,6 +131,11 @@ func (h *Handler) HandleMessage(c *gin.Context) {
 			}
 			if err := database.GormDB.Create(&msgModel).Error; err != nil {
 				log.Printf("Error inserting into db: %v", err)
+			} else {
+				// Broadcast via WebSocket
+				if h.Hub != nil {
+					h.Hub.NotifyMessage(msgModel)
+				}
 			}
 
 			// Auto-save Contact
