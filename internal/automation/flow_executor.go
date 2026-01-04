@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/models"
 	"whatsapp-gateway/internal/whatsapp"
@@ -455,7 +456,109 @@ func (e *Engine) ExecuteNode(waID string, node ReactFlowNode, graph FlowGraphDat
 			}
 
 		case "Image":
-			e.WhatsAppClient.SendMessage(waID, "[Image] "+step.Content)
+			caption := e.ReplaceVariables(waID, step.Content)
+			err := e.WhatsAppClient.SendRawMessage(whatsapp.GenericMessage{
+				MessagingProduct: "whatsapp",
+				RecipientType:    "individual",
+				To:               waID,
+				Type:             "image",
+				Image: &whatsapp.MediaObj{
+					ID:      step.MediaId,
+					Caption: caption,
+				},
+			})
+			if err != nil {
+				log.Printf("[ExecuteNode] Error sending Image: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+
+		case "Video":
+			caption := e.ReplaceVariables(waID, step.Content)
+			err := e.WhatsAppClient.SendRawMessage(whatsapp.GenericMessage{
+				MessagingProduct: "whatsapp",
+				RecipientType:    "individual",
+				To:               waID,
+				Type:             "video",
+				Video: &whatsapp.MediaObj{
+					ID:      step.MediaId,
+					Caption: caption,
+				},
+			})
+			if err != nil {
+				log.Printf("[ExecuteNode] Error sending Video: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+
+		case "Audio":
+			err := e.WhatsAppClient.SendRawMessage(whatsapp.GenericMessage{
+				MessagingProduct: "whatsapp",
+				RecipientType:    "individual",
+				To:               waID,
+				Type:             "audio",
+				Audio: &whatsapp.MediaObj{
+					ID: step.MediaId,
+				},
+			})
+			if err != nil {
+				log.Printf("[ExecuteNode] Error sending Audio: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+
+		case "File":
+			err := e.WhatsAppClient.SendRawMessage(whatsapp.GenericMessage{
+				MessagingProduct: "whatsapp",
+				RecipientType:    "individual",
+				To:               waID,
+				Type:             "document",
+				Document: &whatsapp.MediaObj{
+					ID:       step.MediaId,
+					Caption:  step.Content,
+					Filename: "File",
+				},
+			})
+			if err != nil {
+				log.Printf("[ExecuteNode] Error sending File: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+
+		case "Location":
+			lat, _ := strconv.ParseFloat(step.Latitude, 64)
+			lng, _ := strconv.ParseFloat(step.Longitude, 64)
+			name := e.ReplaceVariables(waID, step.Name)
+			address := e.ReplaceVariables(waID, step.Address)
+
+			err := e.WhatsAppClient.SendRawMessage(whatsapp.GenericMessage{
+				MessagingProduct: "whatsapp",
+				RecipientType:    "individual",
+				To:               waID,
+				Type:             "location",
+				Location: &whatsapp.LocationObj{
+					Latitude:  lat,
+					Longitude: lng,
+					Name:      name,
+					Address:   address,
+				},
+			})
+			if err != nil {
+				log.Printf("[ExecuteNode] Error sending Location: %v", err)
+			}
+			time.Sleep(1 * time.Second)
+
+		case "YouTube":
+			url := e.ReplaceVariables(waID, step.Url)
+			err := e.WhatsAppClient.SendRawMessage(whatsapp.GenericMessage{
+				MessagingProduct: "whatsapp",
+				RecipientType:    "individual",
+				To:               waID,
+				Type:             "text",
+				Text: &whatsapp.TextObj{
+					Body:       url,
+					PreviewUrl: true,
+				},
+			})
+			if err != nil {
+				log.Printf("[ExecuteNode] Error sending YouTube: %v", err)
+			}
 
 		case "Text Input", "Number Input", "Email Input":
 			// Input steps don't send messages - they just wait for user input

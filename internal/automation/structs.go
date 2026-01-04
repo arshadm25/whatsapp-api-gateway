@@ -35,6 +35,12 @@ type ReactFlowStep struct {
 	Validation   *StepValidation `json:"validation,omitempty"`
 	TargetFlowId string          `json:"targetFlowId,omitempty"` // For Chatbot step
 	TargetNodeId string          `json:"targetNodeId,omitempty"` // For Chatbot step
+	MediaId      string          `json:"mediaId,omitempty"`      // For Image, Video, Audio, File
+	Url          string          `json:"url,omitempty"`          // For YouTube
+	Latitude     string          `json:"latitude,omitempty"`     // For Location
+	Longitude    string          `json:"longitude,omitempty"`    // For Location
+	Name         string          `json:"name,omitempty"`         // For Location
+	Address      string          `json:"address,omitempty"`      // For Location
 }
 
 type QuickReplyBtn struct {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 	"whatsapp-gateway/internal/database"
 	"whatsapp-gateway/internal/models"
 
@@ -162,4 +163,74 @@ func (h *AutomationHandler) GetAnalytics(c *gin.Context) {
 	database.GormDB.Model(&models.AutomationLog{}).Where("success = ?", false).Count(&stats.FailedExecs)
 
 	c.JSON(http.StatusOK, stats)
+}
+
+// GetActiveSessions returns all currently active chatbot sessions
+func (h *AutomationHandler) GetActiveSessions(c *gin.Context) {
+	type SessionInfo struct {
+		ID          uint      `json:"id"`
+		WaID        string    `json:"wa_id"`
+		ContactName string    `json:"contact_name"`
+		FlowID      string    `json:"flow_id"`
+		FlowName    string    `json:"flow_name"`
+		CurrentNode string    `json:"current_node"`
+		Status      string    `json:"status"`
+		StartedAt   time.Time `json:"started_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+	}
+
+	var sessions []SessionInfo
+	err := database.GormDB.Table("conversation_sessions").
+		Select("conversation_sessions.*, contacts.name as contact_name, flows.name as flow_name").
+		Joins("LEFT JOIN contacts ON conversation_sessions.wa_id = contacts.wa_id").
+		Joins("LEFT JOIN flows ON conversation_sessions.flow_id = flows.id").
+		Where("conversation_sessions.status = ?", "active").
+		Order("conversation_sessions.updated_at DESC").
+		Scan(&sessions).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, sessions)
+}
+
+// GetSessionMessages returns messages for a specific session
+func (h *AutomationHandler) GetSessionMessages(c *gin.Context) {
+	waID := c.Param("wa_id")
+	startedAtStr := c.Query("started_at")
+
+	// Filter messages for this contact (both sent and received)
+	query := database.GormDB.Where("wa_id = ? OR sender = ?", waID, waID)
+
+	if startedAtStr != "" {
+		startedAt, err := time.Parse(time.RFC3339, startedAtStr)
+		if err == nil {
+			// Only show messages from this session
+			query = query.Where("created_at >= ?", startedAt.Add(-1*time.Second))
+		}
+	}
+
+	var messages []models.Message
+	if err := query.Order("created_at ASC").Find(&messages).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, messages)
+}
+
+// TerminateSession forcefully ends an active session
+func (h *AutomationHandler) TerminateSession(c *gin.Context) {
+	id := c.Param("id")
+
+	if err := database.GormDB.Model(&models.ConversationSession{}).
+		Where("id = ?", id).
+		Update("status", "terminated").Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Session terminated successfully"})
 }

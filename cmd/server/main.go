@@ -73,6 +73,9 @@ func main() {
 		apiGroup.POST("/automation/rules/:id/toggle", automationHandler.ToggleRule)
 		apiGroup.GET("/automation/logs", automationHandler.GetLogs)
 		apiGroup.GET("/automation/analytics", automationHandler.GetAnalytics)
+		apiGroup.GET("/automation/sessions", automationHandler.GetActiveSessions)
+		apiGroup.GET("/automation/sessions/:wa_id/messages", automationHandler.GetSessionMessages)
+		apiGroup.DELETE("/automation/sessions/:id", automationHandler.TerminateSession)
 
 		// WhatsApp Direct API Routes
 		whatsappGroup := apiGroup.Group("/whatsapp")

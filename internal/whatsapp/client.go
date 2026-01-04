@@ -279,6 +279,8 @@ func (c *Client) SendRawMessage(msg GenericMessage) error {
 		} else {
 			content = fmt.Sprintf("%s [interactive:%s]", bodyText, msg.Interactive.Type)
 		}
+	} else if msg.Location != nil {
+		content = fmt.Sprintf("[location]:%s:%f,%f", msg.Location.Name, msg.Location.Latitude, msg.Location.Longitude)
 	} else {
 		content = fmt.Sprintf("%s message", msg.Type)
 	}
